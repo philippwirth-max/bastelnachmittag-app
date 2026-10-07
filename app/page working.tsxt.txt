@@ -1,0 +1,410 @@
+"use client";
+
+import { useState } from "react";
+import { supabase } from "../lib/supabase";
+
+const workshops = [
+  "Christbaumkugeln",
+  "Salben herstellen",
+  "Karten gestalten",
+  "Badekugeln",
+];
+
+type Child = {
+  firstName: string;
+  lastName: string;
+  className: string;
+  birthDate: string;
+  companion: string;
+  slot1: string;
+  slot2: string;
+};
+
+export default function Page() {
+  const [contactName, setContactName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+
+  const [children, setChildren] = useState<Child[]>([
+    {
+      firstName: "",
+      lastName: "",
+      className: "",
+      birthDate: "",
+      companion: "",
+      slot1: "",
+      slot2: "",
+    },
+  ]);
+
+  const [message, setMessage] = useState("");
+
+  function calculateAge(dateString: string) {
+    if (!dateString) return null;
+
+    const birth = new Date(dateString);
+    const today = new Date();
+
+    let age = today.getFullYear() - birth.getFullYear();
+
+    const monthDiff = today.getMonth() - birth.getMonth();
+
+    if (
+      monthDiff < 0 ||
+      (monthDiff === 0 && today.getDate() < birth.getDate())
+    ) {
+      age--;
+    }
+
+    return age;
+  }
+
+  function addChild() {
+    setChildren((current) => [
+      ...current,
+      {
+        firstName: "",
+        lastName: "",
+        className: "",
+        birthDate: "",
+        companion: "",
+        slot1: "",
+        slot2: "",
+      },
+    ]);
+  }
+
+  function updateChild(
+    index: number,
+    field: keyof Child,
+    value: string
+  ) {
+    setChildren((currentChildren) =>
+      currentChildren.map((child, childIndex) =>
+        childIndex === index
+          ? {
+              ...child,
+              [field]: value,
+            }
+          : child
+      )
+    );
+  }
+
+  async function saveRegistration() {
+    try {
+      setMessage("");
+
+      if (!contactName.trim()) {
+        setMessage("❌ Bitte Name der Kontaktperson eingeben.");
+        return;
+      }
+
+      if (!email.trim()) {
+        setMessage("❌ Bitte E-Mail-Adresse eingeben.");
+        return;
+      }
+
+      if (!phone.trim()) {
+        setMessage("❌ Bitte Telefonnummer eingeben.");
+        return;
+      }
+
+      for (const child of children) {
+        if (!child.firstName.trim()) {
+          setMessage("❌ Bitte bei jedem Kind den Vornamen angeben.");
+          return;
+        }
+
+        if (!child.lastName.trim()) {
+          setMessage("❌ Bitte bei jedem Kind den Nachnamen angeben.");
+          return;
+        }
+
+        if (!child.className.trim()) {
+          setMessage("❌ Bitte bei jedem Kind die Klasse angeben.");
+          return;
+        }
+
+        if (!child.birthDate) {
+          setMessage("❌ Bitte bei jedem Kind das Geburtsdatum angeben.");
+          return;
+        }
+
+        if (!child.slot1) {
+          setMessage(
+            `❌ Bitte für ${child.firstName} einen Workshop im Zeitfenster 1 wählen.`
+          );
+          return;
+        }
+
+        if (!child.slot2) {
+          setMessage(
+            `❌ Bitte für ${child.firstName} einen Workshop im Zeitfenster 2 wählen.`
+          );
+          return;
+        }
+
+        const age = calculateAge(child.birthDate);
+
+        if (
+          age !== null &&
+          age < 8 &&
+          !child.companion.trim()
+        ) {
+          setMessage(
+            `❌ ${child.firstName} benötigt eine Begleitperson.`
+          );
+          return;
+        }
+      }
+
+      for (const child of children) {
+        const { error } = await supabase
+          .from("registrations")
+          .insert({
+            parent_name: contactName,
+            email: email,
+            phone: phone,
+            child_name: child.firstName,
+            child_last_name: child.lastName,
+            class_name: child.className,
+            birth_date: child.birthDate,
+            companion: child.companion,
+            workshop_slot1: child.slot1,
+            workshop_slot2: child.slot2,
+          });
+
+        if (error) {
+          throw error;
+        }
+      }
+
+      setMessage("✅ Anmeldung erfolgreich gespeichert.");
+
+      setContactName("");
+      setEmail("");
+      setPhone("");
+
+      setChildren([
+        {
+          firstName: "",
+          lastName: "",
+          className: "",
+          birthDate: "",
+          companion: "",
+          slot1: "",
+          slot2: "",
+        },
+      ]);
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        setMessage(`❌ Fehler: ${error.message}`);
+      } else {
+        setMessage("❌ Unbekannter Fehler.");
+      }
+    }
+  }
+
+  return (
+    <main
+      style={{
+        maxWidth: "900px",
+        margin: "40px auto",
+        padding: "20px",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      <h1>Bastelnachmittag Anmeldung</h1>
+
+      <h2>Kontaktperson</h2>
+
+      <input
+        value={contactName}
+        onChange={(e) => setContactName(e.target.value)}
+        placeholder="Name"
+        style={inputStyle}
+      />
+
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="E-Mail"
+        style={inputStyle}
+      />
+
+      <input
+        type="tel"
+        value={phone}
+        onChange={(e) => setPhone(e.target.value)}
+        placeholder="Telefon"
+        style={inputStyle}
+      />
+
+      <hr style={{ margin: "30px 0" }} />
+
+      <h2>Kinder</h2>
+
+      {children.map((child, index) => {
+        const age = calculateAge(child.birthDate);
+
+        return (
+          <div
+            key={index}
+            style={{
+              border: "1px solid #ddd",
+              padding: "20px",
+              borderRadius: "10px",
+              marginBottom: "20px",
+            }}
+          >
+            <h3>Kind {index + 1}</h3>
+
+            <input
+              value={child.firstName}
+              onChange={(e) =>
+                updateChild(index, "firstName", e.target.value)
+              }
+              placeholder="Vorname"
+              style={inputStyle}
+            />
+
+            <input
+              value={child.lastName}
+              onChange={(e) =>
+                updateChild(index, "lastName", e.target.value)
+              }
+              placeholder="Nachname"
+              style={inputStyle}
+            />
+
+            <input
+              value={child.className}
+              onChange={(e) =>
+                updateChild(index, "className", e.target.value)
+              }
+              placeholder="Klasse"
+              style={inputStyle}
+            />
+
+            <input
+              type="date"
+              value={child.birthDate}
+              onChange={(e) =>
+                updateChild(index, "birthDate", e.target.value)
+              }
+              style={inputStyle}
+            />
+
+            {age !== null && (
+              <p>
+                Alter: <strong>{age}</strong>
+              </p>
+            )}
+
+            {age !== null && age < 8 && (
+              <input
+                value={child.companion}
+                onChange={(e) =>
+                  updateChild(index, "companion", e.target.value)
+                }
+                placeholder="Begleitperson"
+                style={inputStyle}
+              />
+            )}
+
+            <select
+              value={child.slot1}
+              onChange={(e) =>
+                updateChild(index, "slot1", e.target.value)
+              }
+              style={inputStyle}
+            >
+              <option value="">Zeitfenster 1 wählen</option>
+
+              {workshops.map((workshop) => (
+                <option key={workshop} value={workshop}>
+                  {workshop}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={child.slot2}
+              onChange={(e) =>
+                updateChild(index, "slot2", e.target.value)
+              }
+              style={inputStyle}
+            >
+              <option value="">Zeitfenster 2 wählen</option>
+
+              {workshops.map((workshop) => (
+                <option key={workshop} value={workshop}>
+                  {workshop}
+                </option>
+              ))}
+            </select>
+          </div>
+        );
+      })}
+
+      <button
+        type="button"
+        onClick={addChild}
+        style={secondaryButton}
+      >
+        + Weiteres Kind hinzufügen
+      </button>
+
+      <div style={{ marginTop: "30px" }}>
+        <h2>Fotohinweis</h2>
+
+        <p>
+          Während des Bastelnachmittags werden Fotos gemacht.
+          Es werden keine Einzelfotos von Kindern veröffentlicht.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={saveRegistration}
+        style={primaryButton}
+      >
+        Anmeldung speichern
+      </button>
+
+      {message && (
+        <p style={{ marginTop: "20px" }}>
+          {message}
+        </p>
+      )}
+    </main>
+  );
+}
+
+const inputStyle = {
+  width: "100%",
+  padding: "10px",
+  marginBottom: "10px",
+  boxSizing: "border-box" as const,
+};
+
+const primaryButton = {
+  background: "green",
+  color: "white",
+  border: "none",
+  padding: "12px 20px",
+  borderRadius: "6px",
+  cursor: "pointer",
+  marginTop: "20px",
+};
+
+const secondaryButton = {
+  background: "#2563eb",
+  color: "white",
+  border: "none",
+  padding: "10px 18px",
+  borderRadius: "6px",
+  cursor: "pointer",
+};

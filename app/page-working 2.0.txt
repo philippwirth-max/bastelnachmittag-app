@@ -1,0 +1,927 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
+
+const workshops = [
+  "Christbaumkugeln",
+  "Salben herstellen",
+  "Karten gestalten",
+  "Badekugeln",
+];
+
+type Child = {
+  firstName: string;
+  lastName: string;
+  birthDate: string;
+  companion: string;
+  slot1: string;
+  slot2: string;
+};
+
+type Capacity = {
+  workshop: string;
+  slot: 1 | 2;
+  maxPlaces: number;
+};
+
+type RegistrationRow = {
+  workshop_slot1: string | null;
+  workshop_slot2: string | null;
+};
+
+export default function Page() {
+  const [contactName, setContactName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [message, setMessage] = useState("");
+
+  const [capacities, setCapacities] = useState<Capacity[]>([]);
+  const [registrations, setRegistrations] = useState<RegistrationRow[]>([]);
+  const [loadingCapacity, setLoadingCapacity] = useState(true);
+
+  const [children, setChildren] = useState<Child[]>([
+    {
+      firstName: "",
+      lastName: "",
+      birthDate: "",
+      companion: "",
+      slot1: "",
+      slot2: "",
+    },
+  ]);
+
+  useEffect(() => {
+    loadAvailability();
+  }, []);
+
+  function normalizeSlot(value: unknown): 1 | 2 | null {
+    const text = String(value ?? "")
+      .trim()
+      .toLowerCase();
+
+    if (
+      text === "1" ||
+      text === "slot1" ||
+      text === "slot 1" ||
+      text === "zeitfenster 1"
+    ) {
+      return 1;
+    }
+
+    if (
+      text === "2" ||
+      text === "slot2" ||
+      text === "slot 2" ||
+      text === "zeitfenster 2"
+    ) {
+      return 2;
+    }
+
+    return null;
+  }
+
+  async function loadAvailability() {
+    setLoadingCapacity(true);
+
+    try {
+      const { data: capacityData, error: capacityError } =
+        await supabase
+          .from("workshop_capacity")
+          .select("*");
+
+      if (capacityError) {
+        throw capacityError;
+      }
+
+      const parsedCapacities: Capacity[] = [];
+
+      for (const row of capacityData ?? []) {
+        /*
+          Der Code unterstützt mehrere mögliche Spaltennamen.
+
+          Empfohlen sind:
+
+          workshop_name
+          time_slot
+          max_places
+        */
+
+        const workshop =
+          row.workshop_name ??
+          row.workshop ??
+          row.name;
+
+        const rawSlot =
+          row.time_slot ??
+          row.slot ??
+          row.zeitfenster;
+
+        const rawMaxPlaces =
+          row.max_places ??
+          row.max_capacity ??
+          row.capacity ??
+          row.places;
+
+        const slot = normalizeSlot(rawSlot);
+        const maxPlaces = Number(rawMaxPlaces);
+
+        if (
+          typeof workshop === "string" &&
+          slot !== null &&
+          Number.isFinite(maxPlaces)
+        ) {
+          parsedCapacities.push({
+            workshop,
+            slot,
+            maxPlaces,
+          });
+        }
+      }
+
+      setCapacities(parsedCapacities);
+
+      const { data: registrationData, error: registrationError } =
+        await supabase
+          .from("registrations")
+          .select("workshop_slot1, workshop_slot2");
+
+      if (registrationError) {
+        throw registrationError;
+      }
+
+      setRegistrations(registrationData ?? []);
+    } catch (error: unknown) {
+      console.error(error);
+
+      if (error instanceof Error) {
+        setMessage(
+          `❌ Fehler beim Laden der Workshopplätze: ${error.message}`
+        );
+      } else {
+        setMessage(
+          "❌ Die Workshopplätze konnten nicht geladen werden."
+        );
+      }
+    } finally {
+      setLoadingCapacity(false);
+    }
+  }
+
+  function calculateAge(dateString: string): number | null {
+    if (!dateString) return null;
+
+    const birth = new Date(dateString);
+    const today = new Date();
+
+    let age = today.getFullYear() - birth.getFullYear();
+
+    const monthDiff =
+      today.getMonth() - birth.getMonth();
+
+    if (
+      monthDiff < 0 ||
+      (monthDiff === 0 &&
+        today.getDate() < birth.getDate())
+    ) {
+      age--;
+    }
+
+    return age;
+  }
+
+  function addChild() {
+    setChildren((currentChildren) => [
+      ...currentChildren,
+      {
+        firstName: "",
+        lastName: "",
+        birthDate: "",
+        companion: "",
+        slot1: "",
+        slot2: "",
+      },
+    ]);
+  }
+
+  function updateChild(
+    index: number,
+    field: keyof Child,
+    value: string
+  ) {
+    setChildren((currentChildren) =>
+      currentChildren.map((child, childIndex) =>
+        childIndex === index
+          ? {
+              ...child,
+              [field]: value,
+            }
+          : child
+      )
+    );
+  }
+
+  function getMaxPlaces(
+    workshop: string,
+    slot: 1 | 2
+  ): number {
+    const capacity = capacities.find(
+      (item) =>
+        item.workshop === workshop &&
+        item.slot === slot
+    );
+
+    return capacity?.maxPlaces ?? 0;
+  }
+
+  function getBookedPlaces(
+    workshop: string,
+    slot: 1 | 2
+  ): number {
+    if (slot === 1) {
+      return registrations.filter(
+        (registration) =>
+          registration.workshop_slot1 === workshop
+      ).length;
+    }
+
+    return registrations.filter(
+      (registration) =>
+        registration.workshop_slot2 === workshop
+    ).length;
+  }
+
+  function getCurrentFormPlaces(
+    workshop: string,
+    slot: 1 | 2,
+    ignoreChildIndex?: number
+  ): number {
+    return children.filter((child, index) => {
+      if (index === ignoreChildIndex) {
+        return false;
+      }
+
+      if (slot === 1) {
+        return child.slot1 === workshop;
+      }
+
+      return child.slot2 === workshop;
+    }).length;
+  }
+
+  function getRemainingPlaces(
+    workshop: string,
+    slot: 1 | 2,
+    ignoreChildIndex?: number
+  ): number {
+    const maxPlaces = getMaxPlaces(
+      workshop,
+      slot
+    );
+
+    const bookedPlaces = getBookedPlaces(
+      workshop,
+      slot
+    );
+
+    const currentFormPlaces =
+      getCurrentFormPlaces(
+        workshop,
+        slot,
+        ignoreChildIndex
+      );
+
+    return Math.max(
+      0,
+      maxPlaces -
+        bookedPlaces -
+        currentFormPlaces
+    );
+  }
+
+  function workshopExistsInCapacity(
+    workshop: string,
+    slot: 1 | 2
+  ) {
+    return capacities.some(
+      (capacity) =>
+        capacity.workshop === workshop &&
+        capacity.slot === slot
+    );
+  }
+
+  function renderWorkshopOptions(
+    slot: 1 | 2,
+    childIndex: number
+  ) {
+    return workshops.map((workshop) => {
+      const configured =
+        workshopExistsInCapacity(
+          workshop,
+          slot
+        );
+
+      const remaining =
+        getRemainingPlaces(
+          workshop,
+          slot,
+          childIndex
+        );
+
+      const isFull =
+        configured && remaining <= 0;
+
+      let label = workshop;
+
+      if (loadingCapacity) {
+        label += " – Plätze werden geladen";
+      } else if (!configured) {
+        label += " – nicht verfügbar";
+      } else if (isFull) {
+        label += " – ausgebucht";
+      } else if (remaining === 1) {
+        label += " – noch 1 Platz";
+      } else {
+        label += ` – noch ${remaining} Plätze`;
+      }
+
+      return (
+        <option
+          key={workshop}
+          value={workshop}
+          disabled={
+            loadingCapacity ||
+            !configured ||
+            isFull
+          }
+        >
+          {label}
+        </option>
+      );
+    });
+  }
+
+  async function refreshRegistrations() {
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("registrations")
+      .select(
+        "workshop_slot1, workshop_slot2"
+      );
+
+    if (error) {
+      throw error;
+    }
+
+    setRegistrations(data ?? []);
+
+    return data ?? [];
+  }
+
+  async function checkAvailabilityBeforeSave() {
+    const currentRegistrations =
+      await refreshRegistrations();
+
+    function countBooked(
+      workshop: string,
+      slot: 1 | 2
+    ) {
+      if (slot === 1) {
+        return currentRegistrations.filter(
+          (registration) =>
+            registration.workshop_slot1 ===
+            workshop
+        ).length;
+      }
+
+      return currentRegistrations.filter(
+        (registration) =>
+          registration.workshop_slot2 ===
+          workshop
+      ).length;
+    }
+
+    for (const workshop of workshops) {
+      const requestedSlot1 =
+        children.filter(
+          (child) =>
+            child.slot1 === workshop
+        ).length;
+
+      const requestedSlot2 =
+        children.filter(
+          (child) =>
+            child.slot2 === workshop
+        ).length;
+
+      const maxSlot1 =
+        getMaxPlaces(workshop, 1);
+
+      const maxSlot2 =
+        getMaxPlaces(workshop, 2);
+
+      const bookedSlot1 =
+        countBooked(workshop, 1);
+
+      const bookedSlot2 =
+        countBooked(workshop, 2);
+
+      if (
+        requestedSlot1 > 0 &&
+        bookedSlot1 + requestedSlot1 >
+          maxSlot1
+      ) {
+        const free = Math.max(
+          0,
+          maxSlot1 - bookedSlot1
+        );
+
+        setMessage(
+          `❌ Für "${workshop}" im Zeitfenster 1 sind nur noch ${free} Plätze frei. Bitte ändere die Auswahl.`
+        );
+
+        return false;
+      }
+
+      if (
+        requestedSlot2 > 0 &&
+        bookedSlot2 + requestedSlot2 >
+          maxSlot2
+      ) {
+        const free = Math.max(
+          0,
+          maxSlot2 - bookedSlot2
+        );
+
+        setMessage(
+          `❌ Für "${workshop}" im Zeitfenster 2 sind nur noch ${free} Plätze frei. Bitte ändere die Auswahl.`
+        );
+
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  async function saveRegistration() {
+    try {
+      setMessage("");
+
+      if (!contactName.trim()) {
+        setMessage(
+          "❌ Bitte Name der Kontaktperson eingeben."
+        );
+        return;
+      }
+
+      if (!email.trim()) {
+        setMessage(
+          "❌ Bitte E-Mail-Adresse eingeben."
+        );
+        return;
+      }
+
+      if (!phone.trim()) {
+        setMessage(
+          "❌ Bitte Telefonnummer eingeben."
+        );
+        return;
+      }
+
+      for (const child of children) {
+        if (!child.firstName.trim()) {
+          setMessage(
+            "❌ Bitte bei jedem Kind den Vornamen angeben."
+          );
+          return;
+        }
+
+        if (!child.lastName.trim()) {
+          setMessage(
+            "❌ Bitte bei jedem Kind den Nachnamen angeben."
+          );
+          return;
+        }
+
+        if (!child.birthDate) {
+          setMessage(
+            "❌ Bitte bei jedem Kind das Geburtsdatum angeben."
+          );
+          return;
+        }
+
+        if (!child.slot1) {
+          setMessage(
+            `❌ Bitte für ${child.firstName} einen Workshop im Zeitfenster 1 wählen.`
+          );
+          return;
+        }
+
+        if (!child.slot2) {
+          setMessage(
+            `❌ Bitte für ${child.firstName} einen Workshop im Zeitfenster 2 wählen.`
+          );
+          return;
+        }
+
+        const age =
+          calculateAge(
+            child.birthDate
+          );
+
+        if (
+          age !== null &&
+          age < 8 &&
+          !child.companion.trim()
+        ) {
+          setMessage(
+            `❌ ${child.firstName} benötigt eine Begleitperson.`
+          );
+          return;
+        }
+      }
+
+      const enoughPlaces =
+        await checkAvailabilityBeforeSave();
+
+      if (!enoughPlaces) {
+        return;
+      }
+
+      for (const child of children) {
+        const { error } =
+          await supabase
+            .from("registrations")
+            .insert({
+              parent_name:
+                contactName,
+              email: email,
+              phone: phone,
+              child_name:
+                child.firstName,
+              child_last_name:
+                child.lastName,
+              birth_date:
+                child.birthDate,
+              companion:
+                child.companion,
+              workshop_slot1:
+                child.slot1,
+              workshop_slot2:
+                child.slot2,
+            });
+
+        if (error) {
+          throw error;
+        }
+      }
+
+      setMessage(
+        "✅ Anmeldung erfolgreich gespeichert."
+      );
+
+      setContactName("");
+      setEmail("");
+      setPhone("");
+
+      setChildren([
+        {
+          firstName: "",
+          lastName: "",
+          birthDate: "",
+          companion: "",
+          slot1: "",
+          slot2: "",
+        },
+      ]);
+
+      await loadAvailability();
+    } catch (error: unknown) {
+      console.error(error);
+
+      if (error instanceof Error) {
+        setMessage(
+          `❌ Fehler: ${error.message}`
+        );
+      } else {
+        setMessage(
+          "❌ Unbekannter Fehler."
+        );
+      }
+    }
+  }
+
+  return (
+    <main
+      style={{
+        maxWidth: "900px",
+        margin: "40px auto",
+        padding: "20px",
+        fontFamily:
+          "Arial, sans-serif",
+      }}
+    >
+      <h1>
+        Bastelnachmittag Anmeldung
+      </h1>
+
+      <h2>Kontaktperson</h2>
+
+      <input
+        value={contactName}
+        onChange={(e) =>
+          setContactName(
+            e.target.value
+          )
+        }
+        placeholder="Name"
+        style={inputStyle}
+      />
+
+      <input
+        type="email"
+        value={email}
+        onChange={(e) =>
+          setEmail(e.target.value)
+        }
+        placeholder="E-Mail"
+        style={inputStyle}
+      />
+
+      <input
+        type="tel"
+        value={phone}
+        onChange={(e) =>
+          setPhone(e.target.value)
+        }
+        placeholder="Telefon"
+        style={inputStyle}
+      />
+
+      <hr
+        style={{
+          margin: "30px 0",
+        }}
+      />
+
+      <h2>Kinder</h2>
+
+      {loadingCapacity && (
+        <p>
+          Workshopplätze werden
+          geladen …
+        </p>
+      )}
+
+      {children.map(
+        (child, index) => {
+          const age =
+            calculateAge(
+              child.birthDate
+            );
+
+          return (
+            <div
+              key={index}
+              style={{
+                border:
+                  "1px solid #ddd",
+                padding: "20px",
+                borderRadius:
+                  "10px",
+                marginBottom:
+                  "20px",
+              }}
+            >
+              <h3>
+                Kind {index + 1}
+              </h3>
+
+              <input
+                value={
+                  child.firstName
+                }
+                onChange={(e) =>
+                  updateChild(
+                    index,
+                    "firstName",
+                    e.target.value
+                  )
+                }
+                placeholder="Vorname"
+                style={
+                  inputStyle
+                }
+              />
+
+              <input
+                value={
+                  child.lastName
+                }
+                onChange={(e) =>
+                  updateChild(
+                    index,
+                    "lastName",
+                    e.target.value
+                  )
+                }
+                placeholder="Nachname"
+                style={
+                  inputStyle
+                }
+              />
+
+              <input
+                type="date"
+                value={
+                  child.birthDate
+                }
+                onChange={(e) =>
+                  updateChild(
+                    index,
+                    "birthDate",
+                    e.target.value
+                  )
+                }
+                style={
+                  inputStyle
+                }
+              />
+
+              {age !== null && (
+                <p>
+                  Alter:{" "}
+                  <strong>
+                    {age}
+                  </strong>
+                </p>
+              )}
+
+              {age !== null &&
+                age < 8 && (
+                  <input
+                    value={
+                      child.companion
+                    }
+                    onChange={(
+                      e
+                    ) =>
+                      updateChild(
+                        index,
+                        "companion",
+                        e.target
+                          .value
+                      )
+                    }
+                    placeholder="Begleitperson"
+                    style={
+                      inputStyle
+                    }
+                  />
+                )}
+
+              <select
+                value={
+                  child.slot1
+                }
+                onChange={(e) =>
+                  updateChild(
+                    index,
+                    "slot1",
+                    e.target.value
+                  )
+                }
+                style={
+                  inputStyle
+                }
+                disabled={
+                  loadingCapacity
+                }
+              >
+                <option value="">
+                  Zeitfenster 1
+                  wählen
+                </option>
+
+                {renderWorkshopOptions(
+                  1,
+                  index
+                )}
+              </select>
+
+              <select
+                value={
+                  child.slot2
+                }
+                onChange={(e) =>
+                  updateChild(
+                    index,
+                    "slot2",
+                    e.target.value
+                  )
+                }
+                style={
+                  inputStyle
+                }
+                disabled={
+                  loadingCapacity
+                }
+              >
+                <option value="">
+                  Zeitfenster 2
+                  wählen
+                </option>
+
+                {renderWorkshopOptions(
+                  2,
+                  index
+                )}
+              </select>
+            </div>
+          );
+        }
+      )}
+
+      <button
+        type="button"
+        onClick={addChild}
+        style={
+          secondaryButton
+        }
+      >
+        + Weiteres Kind
+        hinzufügen
+      </button>
+
+      <div
+        style={{
+          marginTop: "30px",
+        }}
+      >
+        <h2>Fotohinweis</h2>
+
+        <p>
+          Während des
+          Bastelnachmittags werden
+          Fotos gemacht. Es werden
+          keine Einzelfotos von
+          Kindern veröffentlicht.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={
+          saveRegistration
+        }
+        style={primaryButton}
+        disabled={
+          loadingCapacity
+        }
+      >
+        Anmeldung speichern
+      </button>
+
+      {message && (
+        <p
+          style={{
+            marginTop:
+              "20px",
+          }}
+        >
+          {message}
+        </p>
+      )}
+    </main>
+  );
+}
+
+const inputStyle = {
+  width: "100%",
+  padding: "10px",
+  marginBottom: "10px",
+  boxSizing:
+    "border-box" as const,
+};
+
+const primaryButton = {
+  background: "green",
+  color: "white",
+  border: "none",
+  padding: "12px 20px",
+  borderRadius: "6px",
+  cursor: "pointer",
+  marginTop: "20px",
+};
+
+const secondaryButton = {
+  background: "#2563eb",
+  color: "white",
+  border: "none",
+  padding: "10px 18px",
+  borderRadius: "6px",
+  cursor: "pointer",
+};
