@@ -25,11 +25,11 @@ type Capacity = {
   maxPlaces: number;
 };
 
-type RegistrationRow = {
-  workshop_slot1: string | null;
-  workshop_slot2: string | null;
-  workshop_slot1_status: string | null;
-  workshop_slot2_status: string | null;
+type AvailabilityEntry = {
+  workshop: string;
+  slot: 1 | 2;
+  confirmed: number;
+  waitlist: number;
 };
 
 type SlotStatus = "confirmed" | "waitlist";
@@ -44,8 +44,8 @@ export default function Page() {
   const [capacities, setCapacities] =
     useState<Capacity[]>([]);
 
-  const [registrations, setRegistrations] =
-    useState<RegistrationRow[]>([]);
+  const [availability, setAvailability] =
+    useState<AvailabilityEntry[]>([]);
 
   const [loadingCapacity, setLoadingCapacity] =
     useState(true);
@@ -148,27 +148,7 @@ export default function Page() {
 
       setCapacities(parsedCapacities);
 
-      const {
-        data: registrationData,
-        error: registrationError,
-      } = await supabase
-        .from("registrations")
-        .select(
-          `
-          workshop_slot1,
-          workshop_slot2,
-          workshop_slot1_status,
-          workshop_slot2_status
-          `
-        );
-
-      if (registrationError) {
-        throw registrationError;
-      }
-
-      setRegistrations(
-        registrationData ?? []
-      );
+      await refreshAvailability();
     } catch (error: unknown) {
       console.error(error);
 
@@ -313,6 +293,8 @@ export default function Page() {
                   childIndex === index
                     ? {
                         ...child,
+                        companion:
+                          firstOtherUnder8.companion,
                         slot1:
                           firstOtherUnder8.slot1,
                         slot2:
@@ -326,11 +308,12 @@ export default function Page() {
 
       /*
         Wenn bei einem Kind unter 8
-        ein Workshop gewählt wird,
-        erhalten alle Kinder unter 8
-        denselben Workshop.
+        Begleitperson oder Workshop
+        geändert werden, erhalten alle
+        Kinder unter 8 denselben Wert.
       */
       if (
+        field === "companion" ||
         field === "slot1" ||
         field === "slot2"
       ) {
@@ -415,43 +398,13 @@ export default function Page() {
     );
   }
 
-  function getBookedPlacesFromRows(
-    rows: RegistrationRow[],
-    workshop: string,
-    slot: 1 | 2
-  ): number {
-    if (slot === 1) {
-      return rows.filter(
-        (registration) =>
-          registration.workshop_slot1 ===
-            workshop &&
-          (
-            registration.workshop_slot1_status ??
-            "confirmed"
-          ) === "confirmed"
-      ).length;
-    }
-
-    return rows.filter(
-      (registration) =>
-        registration.workshop_slot2 ===
-          workshop &&
-        (
-          registration.workshop_slot2_status ??
-          "confirmed"
-        ) === "confirmed"
-    ).length;
-  }
-
   function getBookedPlaces(
     workshop: string,
     slot: 1 | 2
   ): number {
-    return getBookedPlacesFromRows(
-      registrations,
-      workshop,
-      slot
-    );
+    return availability.find(
+      (item) => item.workshop === workshop && item.slot === slot
+    )?.confirmed ?? 0;
   }
 
   function getCurrentFormPlaces(
@@ -516,23 +469,9 @@ export default function Page() {
     workshop: string,
     slot: 1 | 2
   ): number {
-    if (slot === 1) {
-      return registrations.filter(
-        (registration) =>
-          registration.workshop_slot1 ===
-            workshop &&
-          registration.workshop_slot1_status ===
-            "waitlist"
-      ).length;
-    }
-
-    return registrations.filter(
-      (registration) =>
-        registration.workshop_slot2 ===
-          workshop &&
-        registration.workshop_slot2_status ===
-          "waitlist"
-    ).length;
+    return availability.find(
+      (item) => item.workshop === workshop && item.slot === slot
+    )?.waitlist ?? 0;
   }
 
   function renderWorkshopOptions(
@@ -607,133 +546,19 @@ export default function Page() {
     );
   }
 
-  async function refreshRegistrations() {
-    const {
-      data,
-      error,
-    } = await supabase
-      .from("registrations")
-      .select(
-        `
-        workshop_slot1,
-        workshop_slot2,
-        workshop_slot1_status,
-        workshop_slot2_status
-        `
-      );
-
-    if (error) {
-      throw error;
+  async function refreshAvailability(): Promise<AvailabilityEntry[]> {
+    const response = await fetch("/api/availability", {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error("Workshopbelegung konnte nicht geladen werden.");
     }
-
-    const rows =
-      (data ??
-        []) as RegistrationRow[];
-
-    setRegistrations(rows);
-
-    return rows;
-  }
-
-  function determineStatuses(
-    currentRegistrations:
-      RegistrationRow[]
-  ) {
-    const bookedCounts =
-      new Map<string, number>();
-
-    for (
-      const workshop of workshops
-    ) {
-      bookedCounts.set(
-        `${workshop}-1`,
-        getBookedPlacesFromRows(
-          currentRegistrations,
-          workshop,
-          1
-        )
-      );
-
-      bookedCounts.set(
-        `${workshop}-2`,
-        getBookedPlacesFromRows(
-          currentRegistrations,
-          workshop,
-          2
-        )
-      );
+    const result: { availability?: AvailabilityEntry[] } = await response.json();
+    if (!Array.isArray(result.availability)) {
+      throw new Error("Ungültige Antwort der Workshopbelegung.");
     }
-
-    return children.map(
-      (child) => {
-        const slot1Key =
-          `${child.slot1}-1`;
-
-        const slot2Key =
-          `${child.slot2}-2`;
-
-        const slot1Booked =
-          bookedCounts.get(
-            slot1Key
-          ) ?? 0;
-
-        const slot2Booked =
-          bookedCounts.get(
-            slot2Key
-          ) ?? 0;
-
-        const slot1Max =
-          getMaxPlaces(
-            child.slot1,
-            1
-          );
-
-        const slot2Max =
-          getMaxPlaces(
-            child.slot2,
-            2
-          );
-
-        const slot1Status:
-          SlotStatus =
-          slot1Booked <
-          slot1Max
-            ? "confirmed"
-            : "waitlist";
-
-        const slot2Status:
-          SlotStatus =
-          slot2Booked <
-          slot2Max
-            ? "confirmed"
-            : "waitlist";
-
-        if (
-          slot1Status ===
-          "confirmed"
-        ) {
-          bookedCounts.set(
-            slot1Key,
-            slot1Booked + 1
-          );
-        }
-
-        if (
-          slot2Status ===
-          "confirmed"
-        ) {
-          bookedCounts.set(
-            slot2Key,
-            slot2Booked + 1
-          );
-        }
-
-        return {
-          slot1Status,
-          slot2Status,
-        };
-      }
-    );
+    setAvailability(result.availability);
+    return result.availability;
   }
 
   async function saveRegistration() {
@@ -871,79 +696,38 @@ export default function Page() {
         }
       }
 
-      const currentRegistrations =
-        await refreshRegistrations();
+      // Die Platzvergabe erfolgt ausschliesslich auf dem Server.
+      // Der Browser schreibt nicht mehr direkt in registrations.
+      const response = await fetch("/api/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          parentName: contactName.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+          children: children.map((child) => ({
+            firstName: child.firstName.trim(),
+            lastName: child.lastName.trim(),
+            birthDate: child.birthDate,
+            companion: child.companion.trim(),
+            slot1: child.slot1,
+            slot2: child.slot2,
+          })),
+        }),
+      });
 
-      const statuses =
-        determineStatuses(
-          currentRegistrations
-        );
+      const result: {
+        error?: string;
+        children?: { slot1Status: SlotStatus; slot2Status: SlotStatus }[];
+      } = await response.json();
 
-      let hasWaitlist =
-        false;
-
-      const rowsToInsert =
-        children.map(
-          (child, index) => {
-            const status =
-              statuses[index];
-
-            if (
-              status.slot1Status ===
-                "waitlist" ||
-              status.slot2Status ===
-                "waitlist"
-            ) {
-              hasWaitlist =
-                true;
-            }
-
-            return {
-              parent_name:
-                contactName.trim(),
-
-              email:
-                email.trim(),
-
-              phone:
-                phone.trim(),
-
-              child_name:
-                child.firstName.trim(),
-
-              child_last_name:
-                child.lastName.trim(),
-
-              birth_date:
-                child.birthDate,
-
-              companion:
-                child.companion.trim(),
-
-              workshop_slot1:
-                child.slot1,
-
-              workshop_slot1_status:
-                status.slot1Status,
-
-              workshop_slot2:
-                child.slot2,
-
-              workshop_slot2_status:
-                status.slot2Status,
-            };
-          }
-        );
-
-      const {
-        error,
-      } = await supabase
-        .from("registrations")
-        .insert(rowsToInsert);
-
-      if (error) {
-        throw error;
+      if (!response.ok || !Array.isArray(result.children)) {
+        throw new Error(result.error || "Anmeldung fehlgeschlagen.");
       }
+
+      const hasWaitlist = result.children.some(
+        (child) => child.slot1Status === "waitlist" || child.slot2Status === "waitlist"
+      );
 
       if (hasWaitlist) {
         setMessage(
@@ -993,463 +777,143 @@ export default function Page() {
   const firstUnder8Index =
     getFirstUnder8Index();
 
+  const isSuccess = message.startsWith("✅");
+
   return (
-    <main
-      style={{
-        maxWidth: "900px",
-        margin: "40px auto",
-        padding: "20px",
-        fontFamily:
-          "Arial, sans-serif",
-      }}
-    >
-      <h1>
-        Bastelnachmittag Anmeldung
-      </h1>
+    <main className="page">
+      <div className="shell">
+        <header className="hero">
+          <div className="eyebrow">KREATIV SEIN · GEMEINSAM ZEIT VERBRINGEN</div>
+          <div className="heroIcon" aria-hidden="true">✂️</div>
+          <h1>Adventsbasteln</h1>
+          <p className="heroText">Kleine Geschenke, grosse Freude! Melde deine Kinder für zwei kreative Workshoprunden an.</p>
+          <div className="heroPills"><span>🎨 4 Workshops</span><span>👧 Für Kinder und Familien</span><span>✨ 2 Zeitfenster</span></div>
+        </header>
 
-      <h2>
-        Kontaktperson
-      </h2>
+        <section className="panel" aria-labelledby="contact-heading">
+          <div className="sectionHeading"><span className="step">1</span><div><h2 id="contact-heading">Kontaktperson</h2><p>Damit wir dich bei Fragen erreichen können.</p></div></div>
+          <div className="fields">
+            <div className="field full"><label htmlFor="contactName">Vorname und Name <span className="required">*</span></label><input id="contactName" autoComplete="name" value={contactName} onChange={(e) => setContactName(e.target.value)} placeholder="Vorname und Name" /></div>
+            <div className="field"><label htmlFor="email">E-Mail-Adresse <span className="required">*</span></label><input id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@beispiel.ch" /></div>
+            <div className="field"><label htmlFor="phone">Telefonnummer <span className="required">*</span></label><input id="phone" type="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="079 123 45 67" /></div>
+          </div>
+        </section>
 
-      <input
-        value={contactName}
-        onChange={(e) =>
-          setContactName(
-            e.target.value
-          )
-        }
-        placeholder="Name"
-        style={inputStyle}
-      />
-
-      <input
-        type="email"
-        value={email}
-        onChange={(e) =>
-          setEmail(
-            e.target.value
-          )
-        }
-        placeholder="E-Mail"
-        style={inputStyle}
-      />
-
-      <input
-        type="tel"
-        value={phone}
-        onChange={(e) =>
-          setPhone(
-            e.target.value
-          )
-        }
-        placeholder="Telefon"
-        style={inputStyle}
-      />
-
-      <hr
-        style={{
-          margin: "30px 0",
-        }}
-      />
-
-      <h2>
-        Kinder
-      </h2>
-
-      {loadingCapacity && (
-        <p>
-          Workshopplätze werden
-          geladen …
-        </p>
-      )}
-
-      {children.map(
-        (
-          child,
-          index
-        ) => {
-          const age =
-            calculateAge(
-              child.birthDate
-            );
-
-          const isUnder8 =
-            age !== null &&
-            age < 8;
-
-          const workshopChoiceLocked =
-            isUnder8 &&
-            firstUnder8Index !== -1 &&
-            index !==
-              firstUnder8Index;
-
-          return (
-            <div
-              key={index}
-              style={{
-                border:
-                  "1px solid #ddd",
-                padding:
-                  "20px",
-                borderRadius:
-                  "10px",
-                marginBottom:
-                  "20px",
-              }}
-            >
-              <div style={childHeaderStyle}>
-                <h3
-                  style={{
-                    margin: 0,
-                  }}
-                >
-                  Kind {index + 1}
-                </h3>
-
-                {children.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      removeChild(index)
-                    }
-                    style={removeButtonStyle}
-                  >
-                    Kind entfernen
-                  </button>
-                )}
-              </div>
-
-              <input
-                value={
-                  child.firstName
-                }
-                onChange={(e) =>
-                  updateChild(
-                    index,
-                    "firstName",
-                    e.target.value
-                  )
-                }
-                placeholder="Vorname"
-                style={
-                  inputStyle
-                }
-              />
-
-              <input
-                value={
-                  child.lastName
-                }
-                onChange={(e) =>
-                  updateChild(
-                    index,
-                    "lastName",
-                    e.target.value
-                  )
-                }
-                placeholder="Nachname"
-                style={
-                  inputStyle
-                }
-              />
-
-              <input
-                type="date"
-                value={
-                  child.birthDate
-                }
-                onChange={(e) =>
-                  updateChild(
-                    index,
-                    "birthDate",
-                    e.target.value
-                  )
-                }
-                style={
-                  inputStyle
-                }
-              />
-
-              {age !== null && (
-                <p>
-                  Alter:{" "}
-                  <strong>
-                    {age}
-                  </strong>
-                </p>
-              )}
-
-              {isUnder8 && (
-                <>
-                  <p>
-                    Für Kinder unter
-                    8 Jahren ist eine
-                    Begleitperson
-                    erforderlich.
-                  </p>
-
-                  <input
-                    value={
-                      child.companion
-                    }
-                    onChange={(e) =>
-                      updateChild(
-                        index,
-                        "companion",
-                        e.target.value
-                      )
-                    }
-                    placeholder="Name der Begleitperson"
-                    style={
-                      inputStyle
-                    }
-                  />
-                </>
-              )}
-
-              {workshopChoiceLocked && (
-                <div
-                  style={
-                    infoBoxStyle
-                  }
-                >
-                  Die Workshopwahl
-                  wird automatisch
-                  vom ersten Kind
-                  unter 8 Jahren
-                  übernommen.
+        <section className="panel" aria-labelledby="children-heading">
+          <div className="sectionHeading"><span className="step">2</span><div><h2 id="children-heading">Kinder und Workshops</h2><p>Für jedes Kind zwei Workshops auswählen. Die Plätze werden direkt angezeigt.</p></div></div>
+          {loadingCapacity && <div className="notice" role="status">⏳ Die freien Workshopplätze werden geladen …</div>}
+          <div className="childList">
+            {children.map((child, index) => {
+              const age = calculateAge(child.birthDate);
+              const isUnder8 = age !== null && age < 8;
+              const sharedUnder8FieldsLocked = isUnder8 && firstUnder8Index !== -1 && index !== firstUnder8Index;
+              const workshopChoiceLocked = sharedUnder8FieldsLocked;
+              return (
+                <div className="childCard" key={index}>
+                  <div className="childHeader">
+                    <div className="childTitle"><span className="childNumber">{index + 1}</span><h3>Kind {index + 1}</h3>{age !== null && <span className="ageBadge">{age} Jahre</span>}</div>
+                    {children.length > 1 && <button className="removeButton" type="button" onClick={() => removeChild(index)}>Entfernen</button>}
+                  </div>
+                  <div className="fields">
+                    <div className="field"><label htmlFor={`first-${index}`}>Vorname <span className="required">*</span></label><input id={`first-${index}`} value={child.firstName} onChange={(e) => updateChild(index, "firstName", e.target.value)} placeholder="Vorname des Kindes" /></div>
+                    <div className="field"><label htmlFor={`last-${index}`}>Nachname <span className="required">*</span></label><input id={`last-${index}`} value={child.lastName} onChange={(e) => updateChild(index, "lastName", e.target.value)} placeholder="Nachname des Kindes" /></div>
+                    <div className="field full"><label htmlFor={`birth-${index}`}>Geburtsdatum <span className="required">*</span></label><input id={`birth-${index}`} type="date"  value={child.birthDate} onChange={(e) => updateChild(index, "birthDate", e.target.value)} /></div>
+                  </div>
+                  {isUnder8 && (
+                    <div className="companionArea">
+                      <p className="tip">👨‍👩‍👧 Kinder unter 8 Jahren basteln mit einer Begleitperson. Diese braucht keinen eigenen Workshopplatz.</p>
+                      <div className="field"><label htmlFor={`companion-${index}`}>Name der Begleitperson <span className="required">*</span></label><input id={`companion-${index}`} value={child.companion} onChange={(e) => updateChild(index, "companion", e.target.value)} placeholder="Vorname und Name" disabled={sharedUnder8FieldsLocked} /></div>
+                    </div>
+                  )}
+                  {workshopChoiceLocked && <div className="notice">🔗 Begleitperson und Workshops werden automatisch vom ersten Kind unter 8 Jahren übernommen.</div>}
+                  <div className="workshopGrid">
+                    <div className="workshopField"><label htmlFor={`slot1-${index}`}><span className="slotNumber">01</span> Zeitfenster 1 <span className="required">*</span></label><select id={`slot1-${index}`} value={child.slot1} onChange={(e) => updateChild(index, "slot1", e.target.value)} disabled={loadingCapacity || workshopChoiceLocked}><option value="">Workshop auswählen</option>{renderWorkshopOptions(1, index)}</select>{child.slot1 && !loadingCapacity && <span className="availabilityNote">{getRemainingPlaces(child.slot1, 1, index) > 0 ? "✓ Plätze verfügbar (Angabe vor Abschluss der Anmeldung)" : "⏳ Aktuell ausgebucht – Warteliste möglich"}</span>}</div>
+                    <div className="workshopField"><label htmlFor={`slot2-${index}`}><span className="slotNumber">02</span> Zeitfenster 2 <span className="required">*</span></label><select id={`slot2-${index}`} value={child.slot2} onChange={(e) => updateChild(index, "slot2", e.target.value)} disabled={loadingCapacity || workshopChoiceLocked}><option value="">Workshop auswählen</option>{renderWorkshopOptions(2, index)}</select>{child.slot2 && !loadingCapacity && <span className="availabilityNote">{getRemainingPlaces(child.slot2, 2, index) > 0 ? "✓ Plätze verfügbar (Angabe vor Abschluss der Anmeldung)" : "⏳ Aktuell ausgebucht – Warteliste möglich"}</span>}</div>
+                  </div>
                 </div>
-              )}
+              );
+            })}
+          </div>
+          <button type="button" className="addButton" onClick={addChild}><span className="plus">+</span> Weiteres Kind hinzufügen</button>
+        </section>
 
-              <label>
-                Zeitfenster 1
-              </label>
+        <section className="panel infoPanel" aria-labelledby="info-heading">
+          <div className="sectionHeading"><span className="step">3</span><div><h2 id="info-heading">Gut zu wissen</h2><p>Die wichtigsten Hinweise zur Anmeldung.</p></div></div>
+          <div className="infoItems">
+            <div className="infoItem"><span className="infoEmoji">👫</span><div><h3>Gemeinsam basteln unter 8 Jahren</h3><p>Mehrere Kinder unter 8 Jahren in derselben Anmeldung haben dieselbe Begleitperson und besuchen dieselben Workshops. Die Auswahl wird automatisch übernommen.</p></div></div>
+            <div className="infoItem"><span className="infoEmoji">🕒</span><div><h3>Warteliste</h3><p>Auch ausgebuchte Workshops können ausgewählt werden. Ist kein Platz mehr frei, wird das Kind für dieses Zeitfenster auf die Warteliste gesetzt.</p></div></div>
+            <div className="infoItem"><span className="infoEmoji">📷</span><div><h3>Fotos</h3><p>Während des Bastelnachmittags werden Fotos gemacht. Es werden keine Einzelfotos von Kindern veröffentlicht.</p></div></div>
+          </div>
+        </section>
 
-              <select
-                value={
-                  child.slot1
-                }
-                onChange={(e) =>
-                  updateChild(
-                    index,
-                    "slot1",
-                    e.target.value
-                  )
-                }
-                style={
-                  inputStyle
-                }
-                disabled={
-                  loadingCapacity ||
-                  workshopChoiceLocked
-                }
-              >
-                <option value="">
-                  Workshop wählen
-                </option>
-
-                {renderWorkshopOptions(
-                  1,
-                  index
-                )}
-              </select>
-
-              <label>
-                Zeitfenster 2
-              </label>
-
-              <select
-                value={
-                  child.slot2
-                }
-                onChange={(e) =>
-                  updateChild(
-                    index,
-                    "slot2",
-                    e.target.value
-                  )
-                }
-                style={
-                  inputStyle
-                }
-                disabled={
-                  loadingCapacity ||
-                  workshopChoiceLocked
-                }
-              >
-                <option value="">
-                  Workshop wählen
-                </option>
-
-                {renderWorkshopOptions(
-                  2,
-                  index
-                )}
-              </select>
-            </div>
-          );
-        }
-      )}
-
-      <button
-        type="button"
-        onClick={addChild}
-        style={
-          secondaryButton
-        }
-      >
-        + Weiteres Kind
-        hinzufügen
-      </button>
-
-      <div
-        style={{
-          marginTop: "30px",
-        }}
-      >
-        <h2>
-          Kinder unter 8 Jahren
-        </h2>
-
-        <p>
-          Werden mehrere Kinder
-          unter 8 Jahren gemeinsam
-          angemeldet, besuchen sie
-          dieselben Workshops.
-          Die Workshopwahl wird
-          automatisch für alle
-          Kinder unter 8 übernommen.
-        </p>
+        <section className="submitPanel">
+          <p>Fast geschafft! Prüfe deine Angaben und sende die Anmeldung ab.</p>
+          <button className="submitButton" type="button" onClick={saveRegistration} disabled={saving || loadingCapacity}>{saving ? "Anmeldung wird gespeichert …" : "Jetzt verbindlich anmelden →"}</button>
+          <span className="submitSubtext">* Pflichtfelder · Die endgültige Platzvergabe erfolgt beim Speichern.</span>
+          {message && <div className={`resultMessage ${isSuccess ? "success" : "error"}`} role="status" aria-live="polite">{message}</div>}
+        </section>
+        <footer className="footer">Adventsbasteln · Gemeinsam kreativ sein</footer>
       </div>
-
-      <div
-        style={{
-          marginTop: "30px",
-        }}
-      >
-        <h2>
-          Hinweis zur Warteliste
-        </h2>
-
-        <p>
-          Ist ein Workshop bereits
-          ausgebucht, kann er
-          trotzdem gewählt werden.
-          Das Kind wird dann für
-          diesen Workshop auf die
-          Warteliste gesetzt.
-        </p>
-      </div>
-
-      <div
-        style={{
-          marginTop: "30px",
-        }}
-      >
-        <h2>
-          Fotohinweis
-        </h2>
-
-        <p>
-          Während des
-          Bastelnachmittags werden
-          Fotos gemacht. Es werden
-          keine Einzelfotos von
-          Kindern veröffentlicht.
-        </p>
-      </div>
-
-      <button
-        type="button"
-        onClick={
-          saveRegistration
-        }
-        style={{
-          ...primaryButton,
-          opacity:
-            saving ||
-            loadingCapacity
-              ? 0.6
-              : 1,
-        }}
-        disabled={
-          saving ||
-          loadingCapacity
-        }
-      >
-        {saving
-          ? "Anmeldung wird gespeichert …"
-          : "Anmeldung speichern"}
-      </button>
-
-      {message && (
-        <p
-          style={{
-            marginTop:
-              "20px",
-            fontWeight:
-              600,
-          }}
-        >
-          {message}
-        </p>
-      )}
+      <style jsx>{`
+        * { box-sizing: border-box; }
+        .page { min-height: 100vh; background: #faf8f3; padding: 24px 16px 60px; color: #292e30; font-family: Arial, Helvetica, sans-serif; }
+        .shell { max-width: 900px; margin: 0 auto; }
+        .hero { background: linear-gradient(125deg,#e5f0ea,#f7eddd); border: 1px solid #e2e9df; border-radius: 24px; padding: 38px 42px 34px; margin-bottom: 22px; position: relative; overflow: hidden; }
+        .eyebrow { color: #37694d; font-size: 11px; letter-spacing: 2px; font-weight: 800; margin-bottom: 16px; }
+        .heroIcon { position: absolute; right: 45px; top: 38px; font-size: 56px; transform: rotate(-14deg); opacity: .88; }
+        h1 { font-size: clamp(32px,5vw,48px); margin: 0 0 12px; color: #264b39; letter-spacing: -1.3px; line-height: 1.12; }
+        .heroText { margin: 0; max-width: 580px; font-size: 17px; line-height: 1.55; color: #455b50; }
+        .heroPills { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 24px; }
+        .heroPills span { background: rgba(255,255,255,.78); border: 1px solid #dce6db; border-radius: 30px; padding: 8px 12px; font-size: 12px; font-weight: 700; color: #3d5b46; }
+        .panel { border: 1px solid #e6e6e0; border-radius: 19px; background: white; padding: 30px 34px; margin-bottom: 20px; box-shadow: 0 5px 22px rgba(27,46,34,.035); }
+        .sectionHeading { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 25px; }
+        .step { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 11px; background: #dcece1; color: #286143; font-size: 16px; font-weight: 800; }
+        h2 { font-size: 22px; margin: 3px 0 6px; color: #263b2e; letter-spacing: -.4px; }
+        .sectionHeading p { font-size: 14px; margin: 0; color: #68726c; line-height: 1.5; }
+        .fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 17px 16px; }
+        .field { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+        .field.full { grid-column: 1 / -1; }
+        label { display: block; font-weight: 700; color: #344239; font-size: 13px; }
+        .required { color: #b05242; }
+        input, select { display: block; border: 1px solid #d7ddd6; border-radius: 10px; background: #fff; width: 100%; min-width: 0; padding: 13px 13px; min-height: 46px; font-size: 15px; font-family: inherit; color: #25382e; transition: border-color .15s,box-shadow .15s; }
+        input:focus,select:focus { outline: none; border-color: #4b8f65; box-shadow: 0 0 0 3px #d9ede0; }
+        input:disabled,select:disabled { color: #666d67; background: #f2f3f0; cursor: not-allowed; }
+        .childList { display: flex; flex-direction: column; gap: 18px; }
+        .childCard { border: 1px solid #e2e8e0; border-radius: 16px; background: #fdfefd; padding: 22px; }
+        .childHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 22px; }
+        .childTitle { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .childNumber { display: grid; place-items:center; width: 30px; height: 30px; border-radius: 50%; color: white; background: #487f5b; font-size: 13px; font-weight: 800; }
+        h3 { margin: 0; color: #2d4737; font-size: 17px; }
+        .ageBadge { padding: 6px 10px; border-radius: 99px; background: #e7f2e8; font-weight: 700; font-size: 12px; color: #3e664d; }
+        .removeButton { border: 1px solid #efd7d4; background: #fff; color: #aa534a; border-radius: 9px; cursor:pointer; padding: 9px 11px; font-size: 12px; font-weight: 700; }
+        .removeButton:hover { background: #fff1ef; }
+        .companionArea { margin-top: 22px; padding: 15px; background: #f0f6ed; border-radius: 12px; }
+        .tip { color: #3c624c; margin: 0 0 14px; font-size: 13px; line-height: 1.55; }
+        .notice { background:#f0f6ff; color: #385975; border: 1px solid #d6e5f8; padding: 12px 14px; border-radius: 10px; line-height: 1.5; margin: 12px 0; font-size: 13px; }
+        .workshopGrid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 15px; margin-top: 23px; }
+        .workshopField { min-width: 0; display: flex; flex-direction: column; gap: 9px; }
+        .slotNumber { display:inline-block; padding: 4px 7px; border-radius: 6px; margin-right: 4px; background: #e5efe6; color: #2d6b49; font-size: 12px; }
+        .availabilityNote { font-size: 11px; color: #68736c; line-height: 1.4; }
+        .addButton { display: block; width: 100%; border-radius: 12px; border: 2px dashed #a7c3ac; background: #f5faf6; padding: 14px 12px; font-weight: 800; font-size: 14px; color: #2f6948; cursor: pointer; margin-top: 18px; }
+        .addButton:hover { background: #eaf5eb; }
+        .plus { font-size: 21px; vertical-align: -2px; margin-right: 4px; }
+        .infoItems { display: flex; flex-direction: column; gap: 20px; }
+        .infoItem { display: flex; align-items: flex-start; gap: 15px; }
+        .infoEmoji { width: 40px; height: 40px; flex: 0 0 40px; display:grid; place-items:center; background: #f2f6ed; border-radius: 12px; font-size: 21px; }
+        .infoItem h3 { font-size: 15px; margin: 0 0 5px; }
+        .infoItem p { color: #67716a; line-height: 1.6; font-size: 13px; margin: 0; }
+        .submitPanel { text-align: center; padding: 25px 22px 10px; }
+        .submitPanel > p { color: #536458; font-size: 15px; margin: 0 0 15px; }
+        .submitButton { width: 100%; max-width: 480px; border: none; border-radius: 13px; background: #2c7150; color: white; min-height: 54px; padding: 16px 20px; font-size: 16px; font-weight: 800; cursor: pointer; box-shadow: 0 6px 14px #215b3833; }
+        .submitButton:hover:not(:disabled) { background: #245e42; }
+        .submitButton:disabled { opacity: .58; cursor:not-allowed; }
+        .submitSubtext { display:block; font-size: 11px; color: #7a817b; margin: 13px auto; }
+        .resultMessage { max-width: 650px; margin: 22px auto 0; border-radius: 12px; border: 1px solid; text-align: left; padding: 16px 18px; line-height: 1.6; font-weight: 700; font-size: 14px; }
+        .resultMessage.success { color: #245b3c; background: #e8f6ed; border-color: #afd6bc; }
+        .resultMessage.error { color: #8e3d34; background: #fff1ee; border-color: #edc5bf; }
+        .footer { padding: 24px 0 0; text-align: center; color: #98a39b; font-size: 12px; }
+        @media (max-width: 640px) { .page { padding: 10px 10px 35px; } .hero { padding: 26px 22px; border-radius: 17px; } .heroIcon { position:static; font-size: 32px; margin-bottom: 10px; transform:none; } .heroText { font-size: 15px; } .heroPills { margin-top: 17px; gap: 6px; } .heroPills span { font-size: 11px; padding: 7px 9px; } .panel { padding: 22px 17px; border-radius: 15px; margin-bottom: 12px; } .fields, .workshopGrid { grid-template-columns: minmax(0,1fr); gap: 16px; } .sectionHeading { margin-bottom: 21px; } h2 { font-size: 19px; } .childCard { padding: 16px 13px; } .childHeader { align-items: flex-start; } .removeButton { flex-shrink: 0; } .submitPanel { padding: 22px 8px 8px; } }
+      `}</style>
     </main>
   );
 }
-
-const inputStyle = {
-  width: "100%",
-  padding: "10px",
-  marginTop: "6px",
-  marginBottom: "14px",
-  boxSizing:
-    "border-box" as const,
-};
-
-const primaryButton = {
-  background: "green",
-  color: "white",
-  border: "none",
-  padding:
-    "12px 20px",
-  borderRadius: "6px",
-  cursor: "pointer",
-  marginTop: "20px",
-};
-
-const secondaryButton = {
-  background: "#2563eb",
-  color: "white",
-  border: "none",
-  padding:
-    "10px 18px",
-  borderRadius: "6px",
-  cursor: "pointer",
-};
-
-const infoBoxStyle = {
-  background: "#eff6ff",
-  border: "1px solid #bfdbfe",
-  borderRadius: "6px",
-  padding: "10px",
-  marginBottom: "14px",
-  color: "#1e3a8a",
-};
-
-const childHeaderStyle = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: "10px",
-  marginBottom: "15px",
-};
-
-const removeButtonStyle = {
-  background: "#fff",
-  color: "#b91c1c",
-  border: "1px solid #b91c1c",
-  padding: "7px 11px",
-  borderRadius: "6px",
-  cursor: "pointer",
-};
