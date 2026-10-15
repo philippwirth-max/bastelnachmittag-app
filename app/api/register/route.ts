@@ -119,7 +119,27 @@ async function sendConfirmationEmail(
     );
 
     if (!tokenResponse.ok) {
-      console.error("Microsoft-Token konnte nicht abgerufen werden. HTTP:", tokenResponse.status);
+      // Nur den OAuth-Fehlertyp und die AADSTS-Nummer protokollieren.
+      // Niemals die vollständige Microsoft-Antwort, Geheimnisse oder Tokens loggen.
+      const responseText = await tokenResponse.text();
+      let oauthError = "unbekannt";
+      try {
+        const parsed: unknown = JSON.parse(responseText);
+        if (parsed && typeof parsed === "object" && "error" in parsed) {
+          const value = (parsed as { error?: unknown }).error;
+          if (typeof value === "string" && /^[a-z_]{1,60}$/i.test(value)) {
+            oauthError = value;
+          }
+        }
+      } catch {
+        // Keine JSON-Antwort: Es wird ausschliesslich der HTTP-Status geloggt.
+      }
+      const aadstsCode = responseText.match(/AADSTS\d{5,9}/)?.[0] ?? "nicht angegeben";
+      console.error("Microsoft-Token abgelehnt:", {
+        httpStatus: tokenResponse.status,
+        oauthError,
+        aadstsCode,
+      });
       return "failed";
     }
 
