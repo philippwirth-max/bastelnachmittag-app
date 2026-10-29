@@ -719,6 +719,7 @@ export default function Page() {
       const result: {
         error?: string;
         children?: { slot1Status: SlotStatus; slot2Status: SlotStatus }[];
+        emailStatus?: "accepted" | "failed" | "not_configured";
       } = await response.json();
 
       if (!response.ok || !Array.isArray(result.children)) {
@@ -736,6 +737,22 @@ export default function Page() {
       } else {
         setMessage(
           "✅ Anmeldung erfolgreich gespeichert. Alle gewählten Workshops sind bestätigt."
+        );
+      }
+
+      // Anmeldung ist unabhängig vom Mailversand gespeichert.
+      // Eine fehlende E-Mail darf keine zweite Buchung auslösen.
+      if (result.emailStatus === "accepted") {
+        setMessage((previous) =>
+          `${previous} 📧 Die Bestätigungs-E-Mail wurde zum Versand angenommen.`
+        );
+      } else if (result.emailStatus === "not_configured") {
+        setMessage((previous) =>
+          `${previous} ⚠️ E-Mail-Versand ist noch nicht eingerichtet.`
+        );
+      } else {
+        setMessage((previous) =>
+          `${previous} ⚠️ Die Bestätigungs-E-Mail konnte nicht versendet werden. Bitte nicht erneut anmelden.`
         );
       }
 
@@ -787,6 +804,7 @@ export default function Page() {
           <div className="heroIcon" aria-hidden="true">✂️</div>
           <h1>Adventsbasteln</h1>
           <p className="heroText">Kleine Geschenke, grosse Freude! Melde deine Kinder für zwei kreative Workshoprunden an.</p>
+          <p className="heroText" style={{ marginTop: 12, fontSize: 15 }}>📍 <strong>Ort:</strong> Pfarreiheim Steinach, Schulstrasse 14a, 9323 Steinach. Die Workshops finden in verschiedenen Räumen statt.</p>
           <div className="heroPills"><span>🎨 4 Workshops</span><span>👧 Für Kinder und Familien</span><span>✨ 2 Zeitfenster</span></div>
         </header>
 
