@@ -438,6 +438,9 @@ export default function Page() {
     slot: 1 | 2,
     ignoreChildIndex?: number
   ): number {
+    // Eine bestehende Warteliste hat Vorrang, auch wenn technisch noch
+    // Einzelplaetze frei sind (z.B. bei wartenden U8-Geschwistern).
+    if (getWaitlistCount(workshop, slot) > 0) return 0;
     const maxPlaces =
       getMaxPlaces(
         workshop,
@@ -845,8 +848,8 @@ export default function Page() {
                   )}
                   {workshopChoiceLocked && <div className="notice">🔗 Begleitperson und Workshops werden automatisch vom ersten Kind unter 8 Jahren übernommen.</div>}
                   <div className="workshopGrid">
-                    <div className="workshopField"><label htmlFor={`slot1-${index}`}><span className="slotNumber">01</span> Zeitfenster 1 <span className="required">*</span></label><select id={`slot1-${index}`} value={child.slot1} onChange={(e) => updateChild(index, "slot1", e.target.value)} disabled={loadingCapacity || workshopChoiceLocked}><option value="">Workshop auswählen</option>{renderWorkshopOptions(1, index)}</select>{child.slot1 && !loadingCapacity && <span className="availabilityNote">{getRemainingPlaces(child.slot1, 1, index) > 0 ? "✓ Plätze verfügbar (Angabe vor Abschluss der Anmeldung)" : "⏳ Aktuell ausgebucht – Warteliste möglich"}</span>}</div>
-                    <div className="workshopField"><label htmlFor={`slot2-${index}`}><span className="slotNumber">02</span> Zeitfenster 2 <span className="required">*</span></label><select id={`slot2-${index}`} value={child.slot2} onChange={(e) => updateChild(index, "slot2", e.target.value)} disabled={loadingCapacity || workshopChoiceLocked}><option value="">Workshop auswählen</option>{renderWorkshopOptions(2, index)}</select>{child.slot2 && !loadingCapacity && <span className="availabilityNote">{getRemainingPlaces(child.slot2, 2, index) > 0 ? "✓ Plätze verfügbar (Angabe vor Abschluss der Anmeldung)" : "⏳ Aktuell ausgebucht – Warteliste möglich"}</span>}</div>
+                    <div className="workshopField"><label htmlFor={`slot1-${index}`}><span className="slotNumber">01</span> Zeitfenster 1 <span className="required">*</span></label><select id={`slot1-${index}`} value={child.slot1} onChange={(e) => updateChild(index, "slot1", e.target.value)} disabled={loadingCapacity || workshopChoiceLocked}><option value="">Workshop auswählen</option>{renderWorkshopOptions(1, index)}</select>{child.slot1 && !loadingCapacity && <span className="availabilityNote">{getRemainingPlaces(child.slot1, 1, index) > 0 ? "✓ Plätze verfügbar (Angabe vor Abschluss der Anmeldung)" : "⏳ Warteliste – keine neuen Direktzusagen"}</span>}</div>
+                    <div className="workshopField"><label htmlFor={`slot2-${index}`}><span className="slotNumber">02</span> Zeitfenster 2 <span className="required">*</span></label><select id={`slot2-${index}`} value={child.slot2} onChange={(e) => updateChild(index, "slot2", e.target.value)} disabled={loadingCapacity || workshopChoiceLocked}><option value="">Workshop auswählen</option>{renderWorkshopOptions(2, index)}</select>{child.slot2 && !loadingCapacity && <span className="availabilityNote">{getRemainingPlaces(child.slot2, 2, index) > 0 ? "✓ Plätze verfügbar (Angabe vor Abschluss der Anmeldung)" : "⏳ Warteliste – keine neuen Direktzusagen"}</span>}</div>
                   </div>
                 </div>
               );

@@ -141,6 +141,37 @@ async function updateRegistration(
       !["confirmed", "waitlist"].includes(status2)) {
     throw new Error("Bitte alle Angaben und Workshopstatus kontrollieren.");
   }
+  // Vor der Workshop-Aenderung prüfen, ob U8-Geschwister zusammenbleiben.
+  const { data: target, error: targetError } = await supabase
+    .from("registrations")
+    .select("email")
+    .eq("id", id)
+    .single();
+  if (targetError || !target) throw new Error("Kind nicht gefunden.");
+  const { data: siblings, error: siblingsError } = await supabase
+    .from("registrations")
+    .select("id,birth_date,companion,workshop_slot1,workshop_slot2,workshop_slot1_status,workshop_slot2_status")
+    .ilike("email", target.email ?? "")
+    .neq("id", id);
+  if (siblingsError) throw new Error(siblingsError.message);
+  const birth = new Date(`${birth_date}T12:00:00`);
+  const today = new Date();
+  let years = today.getFullYear() - birth.getFullYear();
+  if (today.getMonth() < birth.getMonth() ||
+      (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate())) years--;
+  if (years < 8 && (siblings ?? []).some((sibling) => {
+    if (!sibling.birth_date) return false;
+    const date = new Date(`${sibling.birth_date}T12:00:00`);
+    let siblingYears = today.getFullYear() - date.getFullYear();
+    if (today.getMonth() < date.getMonth() ||
+        (today.getMonth() === date.getMonth() && today.getDate() < date.getDate())) siblingYears--;
+    return siblingYears < 8 && (
+      companion.trim() !== String(sibling.companion ?? "").trim() ||
+      slot1 !== sibling.workshop_slot1 || slot2 !== sibling.workshop_slot2 ||
+      status1 !== (sibling.workshop_slot1_status ?? "confirmed") ||
+      status2 !== (sibling.workshop_slot2_status ?? "confirmed")
+    );
+  })) throw new Error("Kinder unter 8 Jahren müssen Begleitperson, Workshops und Status teilen.");
   const { error: workshopError } = await supabase.rpc("admin_update_workshops", {
     p_id: Number(id),
     p_workshop_slot1: slot1,
@@ -211,6 +242,47 @@ async function deleteFamily(formData: FormData) {
   redirect("/admin");
 }
 
+// Alle wartenden Kinder unter 8 mit derselben Begleitperson bilden eine Gruppe.
+// Kinder ab 8 koennen einzeln nachruecken.
+function isAccompanied(child: Registration): boolean {
+  // Bei der Anmeldung ist die Begleitperson fuer Kinder unter 8 Pflicht.
+  return Boolean(child.companion?.trim());
+}
+
+function waitlistGroupsForFamily(children: Registration[]) {
+  const groups = new Map<string, { workshop: string; slot: 1 | 2; children: Registration[] }>();
+  for (const child of children) {
+    for (const slot of [1, 2] as const) {
+      const workshop = slot === 1 ? child.workshop_slot1 : child.workshop_slot2;
+      const status = slot === 1 ? child.workshop_slot1_status : child.workshop_slot2_status;
+      if (!workshop || status !== "waitlist") continue;
+      const key = isAccompanied(child)
+        ? `${slot}|${workshop}|${(child.companion ?? "").trim().toLowerCase()}`
+        : `${slot}|${workshop}|einzel|${child.id}`;
+      if (!groups.has(key)) groups.set(key, { workshop, slot, children: [] });
+      groups.get(key)!.children.push(child);
+    }
+  }
+  return [...groups.values()];
+}
+
+async function promoteWaitlist(formData: FormData) {
+  "use server";
+  const ids = parseRegistrationIds(formData).map(Number);
+  const slot = Number(formData.get("slot"));
+  if (![1, 2].includes(slot) || ids.some((id) => !Number.isSafeInteger(id))) {
+    throw new Error("Ungueltige Wartelistenauswahl.");
+  }
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.rpc("admin_promote_waitlist", {
+    p_registration_ids: ids,
+    p_slot: slot,
+    p_allow_overbooking: formData.get("allow_overbooking") === "yes",
+  });
+  if (error) throw new Error(error.message);
+  redirect("/admin");
+}
+
 function parseRegistrationIds(formData: FormData): Array<string | number> {
   try {
     const ids: unknown = JSON.parse(String(formData.get("registration_ids") ?? ""));
@@ -270,14 +342,14 @@ async function addChildToFamily(formData: FormData) {
     companion = "";
   }
 
-  const { error } = await supabase.rpc("book_workshop_family", {
-    p_parent_name: contact.parent_name,
-    p_email: contact.email,
-    p_phone: contact.phone ?? "",
-    p_children: [{
-      firstName, lastName, birthDate,
-      companion, slot1, slot2,
-    }],
+  const { error } = await supabase.rpc("admin_add_child_to_family", {
+    p_family_ids: ids.map(Number),
+    p_first_name: firstName,
+    p_last_name: lastName,
+    p_birth_date: birthDate,
+    p_companion: companion,
+    p_slot1: slot1,
+    p_slot2: slot2,
   });
   if (error) throw new Error(error.message);
   redirect("/admin");
@@ -442,9 +514,15 @@ export default async function AdminPage() {
             }
           ).length;
 
+        const waiting = registrations.filter((registration) =>
+          normalizeWorkshop(capacity.slot === 1 ? registration.workshop_slot1 : registration.workshop_slot2) === wanted &&
+          (capacity.slot === 1 ? registration.workshop_slot1_status : registration.workshop_slot2_status) === "waitlist"
+        ).length;
+
         return {
           ...capacity,
           booked,
+          waiting,
           free: Math.max(
             0,
             capacity.maxPlaces -
@@ -563,10 +641,11 @@ export default async function AdminPage() {
                 </span>
 
                 <strong>
-                  {item.booked >=
-                  item.maxPlaces
-                    ? "Voll / Warteliste"
-                    : `${item.free} frei`}
+                  {item.waiting > 0
+                    ? `Warteliste (${item.waiting}) – 0 neue Zusagen`
+                    : item.booked >= item.maxPlaces
+                      ? "Voll / Warteliste"
+                      : `${item.free} frei`}
                 </strong>
               </div>
 
@@ -666,7 +745,7 @@ export default async function AdminPage() {
                       </select>
                     </label>
                   </div>
-                  <p style={hintStyle}>Bei weiteren Kindern unter 8 Jahren übernimmt die App automatisch Begleitperson und Workshops der anderen unter 8-Jährigen. Ausgebuchte Workshops führen zur Warteliste.</p>
+                  <p style={hintStyle}>Bei weiteren Kindern unter 8 Jahren übernimmt die App automatisch Begleitperson und Workshops der anderen unter 8-Jährigen. Ausgebuchte Workshops führen zur Warteliste. Bestehende Bestätigungen von U8-Geschwistern werden nicht aufgeteilt: Reichen die Plätze für ein weiteres Kind nicht, wird das Hinzufügen abgelehnt.</p>
                   <button type="submit" style={saveButtonStyle}>Kind hinzufügen</button>
                 </form>
               </details>
@@ -682,6 +761,30 @@ export default async function AdminPage() {
                   <button type="submit" style={{ ...deleteButtonStyle, marginTop: 12 }}>Ganze Familie endgültig löschen</button>
                 </form>
               </details>
+              {waitlistGroupsForFamily(group.children).length > 0 && (
+                <details style={{ padding: "0 17px 17px" }}>
+                  <summary style={detailsSummaryStyle}>Warteliste nachrücken</summary>
+                  <p style={hintStyle}>Geschwister unter 8 werden gemeinsam bestätigt. Eine Überbuchung erfolgt nur mit angekreuzter Zustimmung. Das Nachrücken versendet keine neue E-Mail.</p>
+                  {waitlistGroupsForFamily(group.children).map((waitingGroup) => (
+                    <form
+                      key={`${waitingGroup.slot}-${waitingGroup.workshop}-${waitingGroup.children.map((c) => c.id).join("-")}`}
+                      action={promoteWaitlist}
+                      style={{ padding: "12px 0", borderTop: "1px solid #e3eae5" }}
+                    >
+                      <input type="hidden" name="registration_ids" value={JSON.stringify(waitingGroup.children.map((c) => c.id))} />
+                      <input type="hidden" name="slot" value={waitingGroup.slot} />
+                      <p style={{ margin: "0 0 8px" }}>
+                        <strong>{waitingGroup.workshop}, Zeitfenster {waitingGroup.slot}</strong>: {waitingGroup.children.map((c) => `${c.child_name} ${c.child_last_name}`).join(", ")}
+                      </p>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 14 }}>
+                        <input type="checkbox" name="allow_overbooking" value="yes" style={{ width: "auto" }} />
+                        Überbuchung ausdrücklich erlauben (falls nötig)
+                      </label>
+                      <button type="submit" style={saveButtonStyle}>Bestätigen / nachrücken</button>
+                    </form>
+                  ))}
+                </details>
+              )}
               <div style={{ padding: "0 17px 17px" }}>
                 {group.children.map((registration) => (
                   <div key={String(registration.id)} style={childOverviewStyle}>
