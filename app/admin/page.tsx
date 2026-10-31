@@ -250,7 +250,13 @@ function isAccompanied(child: Registration): boolean {
 }
 
 function waitlistGroupsForFamily(children: Registration[]) {
-  const groups = new Map<string, { workshop: string; slot: 1 | 2; children: Registration[] }>();
+  type WaitingGroup = {
+    workshop: string;
+    slot: 1 | 2;
+    children: Registration[];
+    alreadyConfirmed: Registration[];
+  };
+  const groups = new Map<string, WaitingGroup>();
   for (const child of children) {
     for (const slot of [1, 2] as const) {
       const workshop = slot === 1 ? child.workshop_slot1 : child.workshop_slot2;
@@ -259,9 +265,25 @@ function waitlistGroupsForFamily(children: Registration[]) {
       const key = isAccompanied(child)
         ? `${slot}|${workshop}|${(child.companion ?? "").trim().toLowerCase()}`
         : `${slot}|${workshop}|einzel|${child.id}`;
-      if (!groups.has(key)) groups.set(key, { workshop, slot, children: [] });
+      if (!groups.has(key)) groups.set(key, { workshop, slot, children: [], alreadyConfirmed: [] });
       groups.get(key)!.children.push(child);
     }
+  }
+  // Bei Altanmeldungen koennen U8-Geschwister unterschiedliche Status haben.
+  // Bereits bestaetigte Geschwister sichtbar machen, aber NICHT erneut buchen.
+  for (const group of groups.values()) {
+    const first = group.children[0];
+    if (!isAccompanied(first)) continue;
+    const companion = (first.companion ?? "").trim().toLowerCase();
+    group.alreadyConfirmed = children.filter((child) =>
+      child.id !== first.id &&
+      !group.children.some((waiting) => waiting.id === child.id) &&
+      (child.companion ?? "").trim().toLowerCase() === companion &&
+      (group.slot === 1 ? child.workshop_slot1 : child.workshop_slot2) === group.workshop &&
+      (group.slot === 1 ? child.workshop_slot1_status : child.workshop_slot2_status) === "confirmed" &&
+      child.birth_date != null &&
+      child.birth_date > new Date(new Date().setFullYear(new Date().getFullYear() - 8)).toISOString().slice(0, 10)
+    );
   }
   return [...groups.values()];
 }
@@ -774,8 +796,16 @@ export default async function AdminPage() {
                       <input type="hidden" name="registration_ids" value={JSON.stringify(waitingGroup.children.map((c) => c.id))} />
                       <input type="hidden" name="slot" value={waitingGroup.slot} />
                       <p style={{ margin: "0 0 8px" }}>
-                        <strong>{waitingGroup.workshop}, Zeitfenster {waitingGroup.slot}</strong>: {waitingGroup.children.map((c) => `${c.child_name} ${c.child_last_name}`).join(", ")}
+                        <strong>{waitingGroup.workshop}, Zeitfenster {waitingGroup.slot}</strong>
                       </p>
+                      <p style={{ margin: "0 0 8px" }}>
+                        <strong>Noch auf Warteliste:</strong> {waitingGroup.children.map((c) => `${c.child_name} ${c.child_last_name}`).join(", ")}
+                      </p>
+                      {waitingGroup.alreadyConfirmed.length > 0 && (
+                        <p style={{ margin: "0 0 10px", color: "#286447" }}>
+                          <strong>Geschwister bereits bestätigt:</strong> {waitingGroup.alreadyConfirmed.map((c) => `${c.child_name} ${c.child_last_name}`).join(", ")}. Diese Plätze bleiben unverändert.
+                        </p>
+                      )}
                       <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 14 }}>
                         <input type="checkbox" name="allow_overbooking" value="yes" style={{ width: "auto" }} />
                         Überbuchung ausdrücklich erlauben (falls nötig)
